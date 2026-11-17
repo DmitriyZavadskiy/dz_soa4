@@ -1,0 +1,50 @@
+@startuml
+!include <C4/C4_Container>
+
+title Вариант 1: хореография
+
+Person(user, "Клиент банка")
+System_Ext(senders, "Сервисы банка", "платежи, переводы, списания")
+System_Ext(push_prov, "FCM, APNs")
+System_Ext(sms_prov, "SMS-провайдеры A и B")
+System_Ext(email_prov, "Email-провайдеры A и B")
+Container(app, "Мобильное приложение", "iOS, Android", "показывает push, отправляет ack")
+
+System_Boundary(platform, "Notification Platform") {
+  Container(api, "notification-api", "Go, REST", "приём, проверка event_id")
+  ContainerQueue(kafka, "Kafka", "transactional.requests, push/sms/email.requests, push/sms.wait, delivery.events")
+  Container(router, "router", "Go", "строит цепочку каналов")
+  Container(prefs, "preferences", "Go, PostgreSQL, кеш в Redis", "настройки и контакты")
+  Container(push, "push-service", "Go", "отправка, ожидание ack, передача дальше")
+  Container(sms, "sms-service", "Go", "отправка, ожидание отчёта, передача дальше")
+  Container(email, "email-service", "Go", "отправка")
+  ContainerDb(redis, "Redis Sentinel", "ключи идемпотентности, флаги подтверждений")
+  Container(callback, "callback-api", "Go, REST", "ack приложения, отчёты sms, возвраты email")
+  Container(status, "status-service", "Go", "собирает статусы из событий")
+  ContainerDb(ch, "ClickHouse", "история статусов")
+}
+
+Rel_R(senders, api, "уведомление с event_id", "REST")
+Rel_R(api, kafka, "transactional.requests")
+Rel_D(api, redis, "проверка event_id")
+Rel_U(router, kafka, "читает запросы, пишет push.requests")
+Rel_L(router, prefs, "цепочка каналов")
+Rel_R(kafka, push, "push.requests")
+Rel_D(push, sms, "нет ack за 15 с: sms.requests через Kafka")
+Rel_D(sms, email, "нет отчёта за 60 с: email.requests через Kafka")
+Rel_L(push, redis, "флаги ack")
+Rel_L(sms, redis, "флаги отчётов")
+Rel_R(push, push_prov, "отправка")
+Rel_R(sms, sms_prov, "отправка")
+Rel_R(email, email_prov, "отправка")
+Rel_D(push_prov, app, "push")
+Rel(app, callback, "ack")
+Rel(sms_prov, callback, "отчёт о доставке")
+Rel(email_prov, callback, "возвраты")
+Rel(callback, kafka, "delivery.events")
+Rel_U(status, kafka, "читает все события")
+Rel_D(status, ch, "статусы")
+Rel_D(app, user, "уведомление")
+Rel_D(sms_prov, user, "sms")
+Rel_D(email_prov, user, "email")
+@enduml

@@ -1,0 +1,38 @@
+@startuml
+title Вариант 1: основной сценарий, push доставлен
+autonumber
+participant "сервис банка" as S
+participant "notification-api" as API
+database "Redis" as R
+queue "Kafka" as K
+participant "router" as RT
+participant "preferences" as P
+participant "push-service" as PS
+participant "FCM / APNs" as FCM
+participant "мобильное\nприложение" as APP
+participant "callback-api" as CB
+participant "status-service" as ST
+
+S -> API: POST /notifications, event_id
+API -> R: SETNX event_id
+API -> K: transactional.requests, acks=all
+API --> S: 202
+K -> RT: запрос
+RT -> P: цепочка каналов
+P --> RT: push, sms, email
+RT -> K: push.requests, цепочка внутри сообщения
+K -> PS: запрос
+PS -> R: SETNX ключ отправки
+PS -> FCM: отправить
+PS -> K: push.wait, дедлайн через 15 с
+FCM -> APP: push
+APP -> CB: ack
+CB -> K: delivery.events: push доставлен
+K -> PS: ack
+PS -> R: флаг ack
+K -> PS: push.wait, дедлайн наступил
+PS -> R: флаг ack есть
+note right of PS: цепочка завершена
+K -> ST: все события
+ST -> ST: запись в ClickHouse
+@enduml

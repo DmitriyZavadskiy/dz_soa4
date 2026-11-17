@@ -1,0 +1,40 @@
+@startuml
+title Вариант 1: failover, push без ack, sms через второго провайдера, поздний ack push
+autonumber
+participant "push-service" as PS
+database "Redis" as R
+queue "Kafka" as K
+participant "FCM / APNs" as FCM
+participant "мобильное\nприложение" as APP
+participant "sms-service" as SS
+participant "SMS-провайдер A" as A
+participant "SMS-провайдер B" as B
+participant "email-service" as ES
+participant "callback-api" as CB
+
+K -> PS: push.requests
+PS -> FCM: отправить
+PS -> K: push.wait, дедлайн через 15 с
+note over APP: ack не пришёл за 15 с
+K -> PS: push.wait, дедлайн наступил
+PS -> R: флага ack нет
+PS -> K: sms.requests
+K -> SS: запрос
+SS -> R: SETNX ключ отправки
+SS -> A: отправить
+A --> SS: ошибка
+SS -> B: отправить, breaker провайдера A открыт
+B --> SS: принято
+SS -> K: sms.wait, дедлайн через 60 с
+APP -> CB: поздний ack push
+CB -> K: delivery.events: push доставлен
+K -> PS: ack
+PS -> R: флаг ack
+note over B: отчёт о доставке не пришёл за 60 с
+K -> SS: sms.wait, дедлайн наступил
+SS -> R: флага отчёта нет
+SS -> K: email.requests
+K -> ES: запрос
+ES -> ES: отправить email
+note over PS, ES: push уже доставлен, но sms-service об этом не знает\nпользователь получает push, sms и email, остановить цепочку некому
+@enduml

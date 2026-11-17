@@ -1,0 +1,44 @@
+@startuml
+!include <C4/C4_Container>
+
+title Вариант 2: оркестратор доставки
+
+Person(user, "Клиент банка")
+System_Ext(senders, "Сервисы банка", "платежи, переводы, списания")
+System_Ext(push_prov, "FCM, APNs")
+System_Ext(sms_prov, "SMS-провайдеры A и B")
+System_Ext(email_prov, "Email-провайдеры A и B")
+Container(app, "Мобильное приложение", "iOS, Android", "показывает push, отправляет ack")
+
+System_Boundary(platform, "Notification Platform") {
+  Container(api, "notification-api", "Go, REST", "приём")
+  ContainerQueue(kafka, "Kafka", "transactional.requests, push/sms/email.requests, channel.results, delivery.events, delivery.status")
+  Container(orch, "delivery-orchestrator", "Go", "состояние доставки, цепочка каналов, таймеры, решение о переключении")
+  ContainerDb(db, "PostgreSQL + Patroni", "доставки, outbox")
+  Container(prefs, "preferences", "Go, PostgreSQL, кеш в Redis", "настройки и контакты")
+  Container(adapters, "channel-adapters", "Go", "push, sms, email: только отправка, breaker на каждого провайдера")
+  ContainerDb(redis, "Redis Sentinel", "ключи отправки")
+  Container(callback, "callback-api", "Go, REST", "ack приложения, отчёты sms, возвраты email")
+  ContainerDb(ch, "ClickHouse", "история статусов")
+}
+
+Rel_R(senders, api, "уведомление с event_id", "REST")
+Rel_R(api, kafka, "transactional.requests, acks=all")
+Rel_U(orch, kafka, "читает запросы и подтверждения, пишет запросы каналам и статусы")
+Rel_D(orch, db, "состояние и outbox в одной транзакции")
+Rel_L(orch, prefs, "цепочка каналов")
+Rel_L(adapters, kafka, "читает запросы, пишет результаты")
+Rel_D(adapters, redis, "ключ отправки")
+Rel_R(adapters, push_prov, "отправка")
+Rel_R(adapters, sms_prov, "отправка")
+Rel_R(adapters, email_prov, "отправка")
+Rel_D(push_prov, app, "push")
+Rel_L(app, callback, "ack")
+Rel(sms_prov, callback, "отчёт о доставке")
+Rel(email_prov, callback, "возвраты")
+Rel_U(callback, kafka, "delivery.events")
+Rel_U(ch, kafka, "читает delivery.status")
+Rel_D(app, user, "уведомление")
+Rel_D(sms_prov, user, "sms")
+Rel_D(email_prov, user, "email")
+@enduml

@@ -1,0 +1,34 @@
+@startuml
+title Вариант 2: основной сценарий, push доставлен
+autonumber
+participant "сервис банка" as S
+participant "notification-api" as API
+queue "Kafka" as K
+participant "delivery-\norchestrator" as O
+database "PostgreSQL" as DB
+participant "preferences" as P
+participant "push-adapter" as PA
+database "Redis" as R
+participant "FCM / APNs" as FCM
+participant "мобильное\nприложение" as APP
+participant "callback-api" as CB
+
+S -> API: POST /notifications, event_id
+API -> K: transactional.requests, acks=all
+API --> S: 202
+K -> O: запрос
+O -> P: цепочка каналов
+P --> O: push, sms, email
+O -> DB: одна транзакция:\nINSERT доставки ON CONFLICT (event_id) DO NOTHING\nstate=WAIT_PUSH, deadline=+15 с\noutbox: запрос push
+O -> K: push.requests из outbox
+K -> PA: запрос
+PA -> R: SETNX ключ отправки
+PA -> FCM: отправить
+PA -> K: channel.results: принято
+FCM -> APP: push
+APP -> CB: ack
+CB -> K: delivery.events: push доставлен
+K -> O: ack
+O -> DB: UPDATE state=DELIVERED\nWHERE state=WAIT_PUSH
+O -> K: delivery.status, читает ClickHouse
+@enduml

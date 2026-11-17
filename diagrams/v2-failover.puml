@@ -1,0 +1,38 @@
+@startuml
+title Вариант 2: failover, push без ack, sms через второго провайдера, поздний ack push
+autonumber
+queue "Kafka" as K
+participant "delivery-\norchestrator" as O
+database "PostgreSQL" as DB
+participant "push-adapter" as PA
+participant "мобильное\nприложение" as APP
+participant "sms-adapter" as SA
+database "Redis" as R
+participant "SMS-провайдер A" as A
+participant "SMS-провайдер B" as B
+participant "callback-api" as CB
+
+O -> DB: state=WAIT_PUSH, deadline=+15 с, outbox: запрос push
+O -> K: push.requests
+K -> PA: запрос, push отправлен
+note over APP: ack не пришёл за 15 с
+O -> DB: таймер: SELECT ... WHERE deadline <= now()\nFOR UPDATE SKIP LOCKED
+O -> DB: одна транзакция:\nUPDATE state=WAIT_SMS, deadline=+60 с WHERE state=WAIT_PUSH\noutbox: запрос sms
+O -> K: sms.requests из outbox
+K -> SA: запрос
+SA -> R: SETNX ключ отправки
+SA -> A: отправить
+A --> SA: ошибка
+SA -> B: отправить, breaker провайдера A открыт
+B --> SA: принято
+SA -> K: channel.results: принято, провайдер B
+APP -> CB: поздний ack push
+CB -> K: delivery.events: push доставлен
+K -> O: ack
+O -> DB: UPDATE state=DELIVERED, channel=push\nWHERE state=WAIT_SMS
+note over O: цепочка остановлена, email не уйдёт\nотчёт sms, если придёт позже, только записывается
+B -> CB: отчёт: доставлено
+CB -> K: delivery.events: sms доставлено
+K -> O: отчёт
+O -> DB: доставка уже DELIVERED, только запись события
+@enduml
